@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<!--
+  QR Code Generator — single-page app (no backend).
+
+  Flow:
+    1. User picks a QR type (URL, text, email, etc.)
+    2. User enters content in the matching form
+    3. A live preview updates as they type (all processing happens in the browser)
+    4. Download opens a modal to export PNG/JPEG/GIF/SVG/EPS
+    5. Embed opens a modal with a data-URL and ready-made <img> HTML
+
+  Dependencies (local, in assets/):
+    - qrcode.min.js  — generates QR codes
+    - gifenc.mjs     — loaded on demand when exporting GIF
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QR Code Generator</title>
+  <style>
+    /* Custom brand fonts (variable-weight WOFF2 files) */
+    @font-face {
+      font-display: swap;
+      font-family: "Spiller";
+      font-style: normal;
+      src: url("assets/fonts/Spiller-Upright-weight-VF-Web-V2.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-display: swap;
+      font-family: "SpillerSerif";
+      font-style: normal;
+      src: url("assets/fonts/SpillerSerif-Upright-weight-VF-Web.woff2") format("woff2");
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    /* Design tokens — colours reused across the UI */
+    :root {
+      --va-text: #1d1e20;
+      --va-text-inverse: #fff;
+      --va-muted: #aaabae;
+      --va-muted-dark: #70787c;
+      --va-border: #70787c;
+      --va-surface: #393b3f;
+      --va-surface-dark: #505354;
+      --va-bg: #1d1e20;
+      --va-theme: #ceffd6;
+      --va-theme-dark: #a0ffaf;
+      --va-accent: #50e3c2;
+      --va-accent-hover: #36dfb9;
+      --va-focus: #e6ff02;
+      --va-input-bg: #252629;
+    }
+
+    html {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Spiller", Arial, Helvetica, sans-serif;
+      font-size: 15px;
+      line-height: 1.4;
+      font-variation-settings: "wght" 400;
+      color: var(--va-text-inverse);
+      background-color: var(--va-bg);
+      background-image: radial-gradient(circle at 50% 9%, rgba(255, 255, 255, 0.09), rgba(29, 30, 32, 0.09) 85%, rgba(29, 30, 32, 0.09) 105%);
+      background-repeat: no-repeat;
+    }
+
+    a {
+      color: var(--va-theme);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    a:hover {
+      color: var(--va-accent);
+    }
+
+    /* Accessible focus ring for keyboard navigation */
+    a:focus-visible,
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible,
+    select:focus-visible {
+      outline: 0;
+      box-shadow: 0 0 0 2px var(--va-bg), 0 0 0 4px var(--va-focus);
+    }
+
+    /* Page header */
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 40px 20px 60px;
+    }
+
+    .page-header {
+      margin-bottom: 40px;
+    }
+
+    .page-title {
+      margin: 0;
+      font-size: 1.533rem;
+      line-height: 2.4rem;
+      font-variation-settings: "wght" 500;
+    }
+
+    .page-title::after {
+      content: "";
+      display: block;
+      width: 40px;
+      height: 2px;
+      background: var(--va-text-inverse);
+      margin: 20px 0 10px;
+    }
+
+    .page-credit {
+      margin: 0;
+      font-size: 1.133rem;
+      line-height: 1.866rem;
+      font-variation-settings: "wght" 300;
+      color: var(--va-muted);
+    }
+
+    @media (min-width: 768px) {
+      .page-title {
+        font-size: 2.067rem;
+        line-height: 2.8rem;
+      }
+
+      .page-title::after {
+        width: 56px;
+        height: 4px;
+        margin: 30px 0 15px;
+      }
+    }
+
+    /* Three-column layout: type picker | content form | live preview */
+    .generator {
+      display: grid;
+      grid-template-columns: 200px 1fr 300px;
+      gap: 0;
+    }
+
+    .panel {
+      padding: 0 24px 24px;
+      border-left: 1px dashed var(--va-border);
+    }
+
+    .panel:first-child {
+      border-left: none;
+      padding-left: 0;
+    }
+
+    .panel:last-child {
+      padding-right: 0;
+    }
+
+    .panel-heading {
+      margin: 0 0 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px dashed var(--va-border);
+    }
+
+    .panel-heading__step {
+      display: block;
+      font-size: 13px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--va-muted);
+      font-variation-settings: "wght" 400;
+      margin-bottom: 6px;
+    }
+
+    .panel-heading__title {
+      display: block;
+      font-size: 1.133rem;
+      line-height: 1.866rem;
+      font-variation-settings: "wght" 500;
+    }
+
+    .panel-heading .type-label {
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--va-theme);
+      margin-left: 0.5rem;
+    }
+
+    /* Icon buttons for URL, text, email, phone, SMS, WiFi */
+    .type-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 53px);
+      grid-auto-rows: 53px;
+      gap: 8px;
+      width: fit-content;
+      justify-content: start;
+    }
+
+    .type-btn {
+      width: 53px;
+      height: 53px;
+      border: 1px solid var(--va-border);
+      background: var(--va-surface-dark);
+      border-radius: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      color: var(--va-text-inverse);
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+    }
+
+    .type-btn:hover {
+      background: var(--va-surface);
+      border-color: var(--va-theme);
+    }
+
+    .type-btn.active {
+      background: var(--va-theme);
+      border-color: var(--va-theme);
+      color: var(--va-text);
+    }
+
+    .type-btn svg {
+      width: 26px;
+      height: 26px;
+      flex-shrink: 0;
+      fill: currentColor;
+    }
+
+    /* Form fields */
+    .field-label {
+      font-size: 13px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--va-muted);
+      font-variation-settings: "wght" 400;
+      margin-bottom: 8px;
+    }
+
+    .field-label-spaced {
+      margin-top: 20px;
+    }
+
+    textarea,
+    input[type="text"],
+    input[type="url"],
+    input[type="email"],
+    select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--va-border);
+      border-radius: 2px;
+      font: inherit;
+      font-variation-settings: "wght" 400;
+      color: var(--va-text-inverse);
+      background: var(--va-input-bg);
+      resize: vertical;
+    }
+
+    textarea {
+      min-height: 120px;
+    }
+
+    textarea::placeholder,
+    input::placeholder {
+      color: var(--va-muted-dark);
+    }
+
+    select {
+      cursor: pointer;
+    }
+
+    select option {
+      background: var(--va-bg);
+      color: var(--va-text-inverse);
+    }
+
+    .char-count {
+      margin-top: 10px;
+      color: var(--va-muted-dark);
+      font-size: 13px;
+    }
+
+    .hint {
+      margin-top: 16px;
+      color: var(--va-muted-dark);
+      font-size: 14px;
+      line-height: 1.2rem;
+      font-variation-settings: "wght" 300;
+    }
+
+    .notice {
+      margin-top: 20px;
+      padding: 12px 14px;
+      background: transparent;
+      border: 1px solid var(--va-theme);
+      border-radius: 2px;
+      font-size: 14px;
+      line-height: 1.2rem;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      color: var(--va-text-inverse);
+    }
+
+    .notice svg {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      margin-top: 1px;
+      fill: var(--va-theme);
+    }
+
+    /* Only the form matching the selected type is visible (.hidden toggled by JS) */
+    .content-form.hidden {
+      display: none;
+    }
+
+    /* Preview */
+    .preview-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 240px;
+      background: var(--va-bg);
+      padding: 20px;
+    }
+
+    .preview-wrap canvas,
+    .preview-wrap img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      background: #fff;
+      box-shadow: 0 17px 24px rgba(0, 0, 0, 0.33);
+    }
+
+    .preview-wrap canvas[hidden] {
+      display: none !important;
+    }
+
+    .preview-placeholder {
+      color: var(--va-muted);
+      text-align: center;
+      font-size: 14px;
+      line-height: 1.2rem;
+      max-width: 200px;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 10px 19px 8px;
+      border: 1px solid transparent;
+      border-radius: 2px;
+      font: inherit;
+      font-size: 1.133rem;
+      line-height: 1.866rem;
+      font-variation-settings: "wght" 400;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--va-accent);
+      border-color: var(--va-accent);
+      color: var(--va-text);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--va-accent-hover);
+      border-color: var(--va-accent-hover);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border-color: var(--va-text-inverse);
+      color: var(--va-text-inverse);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--va-surface-dark);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Download / Embed modals — hidden until .open is added by JS */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(29, 30, 32, 0.85);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal {
+      background: var(--va-surface-dark);
+      border-radius: 2px;
+      max-width: 520px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      color: var(--va-text-inverse);
+      box-shadow: 0 17px 48px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px;
+      border-bottom: 1px dashed var(--va-border);
+    }
+
+    .modal-header h3 {
+      margin: 0;
+      font-size: 1.133rem;
+      line-height: 1.866rem;
+      font-variation-settings: "wght" 500;
+    }
+
+    .modal-close {
+      background: var(--va-bg);
+      border: 1px solid var(--va-text-inverse);
+      border-radius: 50%;
+      width: 34px;
+      height: 34px;
+      font-size: 1.25rem;
+      line-height: 1;
+      cursor: pointer;
+      color: var(--va-text-inverse);
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-close:hover {
+      background: var(--va-surface);
+    }
+
+    .modal-body {
+      padding: 24px;
+    }
+
+    .modal-preview {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .modal-preview canvas {
+      max-width: 180px;
+      background: #fff;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .option-group {
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px dashed var(--va-border);
+    }
+
+    .option-group:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .option-group label {
+      display: block;
+      font-size: 13px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--va-muted);
+      font-variation-settings: "wght" 400;
+      margin-bottom: 8px;
+    }
+
+    .option-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      color: var(--va-text-inverse);
+    }
+
+    .option-row input[type="color"] {
+      width: 40px;
+      height: 32px;
+      padding: 2px;
+      border: 1px solid var(--va-border);
+      border-radius: 2px;
+      cursor: pointer;
+      background: var(--va-input-bg);
+    }
+
+    .option-row select,
+    .option-row input[type="number"] {
+      padding: 8px 10px;
+      border: 1px solid var(--va-border);
+      border-radius: 2px;
+      font: inherit;
+      color: var(--va-text-inverse);
+      background: var(--va-input-bg);
+    }
+
+    .format-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .format-btn {
+      padding: 8px 16px;
+      background: var(--va-accent);
+      color: var(--va-text);
+      border: 1px solid var(--va-accent);
+      border-radius: 2px;
+      font: inherit;
+      font-size: 15px;
+      font-variation-settings: "wght" 400;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .format-btn:hover {
+      background: var(--va-accent-hover);
+      border-color: var(--va-accent-hover);
+    }
+
+    .embed-field {
+      margin-bottom: 16px;
+    }
+
+    .embed-field label {
+      display: block;
+      font-size: 13px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--va-muted);
+      margin-bottom: 8px;
+    }
+
+    .embed-field textarea {
+      min-height: 60px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    /* Footer */
+    .site-footer {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 30px 20px 50px;
+      border-top: 1px dashed var(--va-border);
+      color: var(--va-muted-dark);
+      font-size: 14px;
+      line-height: 1.2rem;
+    }
+
+    .site-footer p {
+      margin: 0;
+    }
+
+    /* Stack panels vertically on narrow screens */
+    @media (max-width: 900px) {
+      .generator {
+        grid-template-columns: 1fr;
+      }
+
+      .panel {
+        border-left: none;
+        border-top: 1px dashed var(--va-border);
+        padding: 24px 0 0;
+      }
+
+      .panel:first-child {
+        border-top: none;
+        padding-top: 0;
+      }
+
+      .type-grid {
+        grid-template-columns: repeat(6, 53px);
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .panel:first-child .type-grid {
+        margin-bottom: 20px;
+      }
+    }
+  </style>
+</head>
+<body class="theme-silent-green">
+  <!-- Main generator UI -->
+  <main class="page">
+    <section class="page-header">
+      <h1 class="page-title">QR Code Generator</h1>
+      <p class="page-credit">Create downloadable QR codes for URLs, text, and more.</p>
+    </section>
+
+    <div class="generator">
+      <!-- Step 1: pick what kind of data the QR code will encode -->
+      <section class="panel" aria-labelledby="type-heading">
+        <h2 class="panel-heading" id="type-heading">
+          <span class="panel-heading__step">Step 1</span>
+          <span class="panel-heading__title">Type <span class="type-label" id="type-label">url</span></span>
+        </h2>
+        <div class="type-grid" role="group" aria-label="QR code type">
+          <button type="button" class="type-btn active" data-type="url" title="Website URL" aria-pressed="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+          </button>
+          <button type="button" class="type-btn" data-type="text" title="Plain text" aria-pressed="false">
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+          </button>
+          <button type="button" class="type-btn" data-type="email" title="Email" aria-pressed="false">
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+          </button>
+          <button type="button" class="type-btn" data-type="tel" title="Phone number" aria-pressed="false">
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+          </button>
+          <button type="button" class="type-btn" data-type="sms" title="SMS" aria-pressed="false">
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+          </button>
+          <button type="button" class="type-btn" data-type="wifi" title="WiFi" aria-pressed="false">
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+          </button>
+        </div>
+      </section>
+
+      <!-- Step 2: enter the content — form fields swap based on selected type -->
+      <section class="panel" aria-labelledby="contents-heading">
+        <h2 class="panel-heading" id="contents-heading">
+          <span class="panel-heading__step">Step 2</span>
+          <span class="panel-heading__title">Contents</span>
+        </h2>
+
+        <!-- One form per QR type; JS shows the one matching data-form="currentType" -->
+        <div class="content-form" data-form="url">
+          <div class="field-label">Website address</div>
+          <input type="url" id="input-url" placeholder="https://example.com" spellcheck="false">
+        </div>
+
+        <div class="content-form hidden" data-form="text">
+          <div class="field-label">Text</div>
+          <textarea id="input-text" placeholder="Enter your text"></textarea>
+        </div>
+
+        <div class="content-form hidden" data-form="email">
+          <div class="field-label">Email</div>
+          <input type="email" id="input-email" placeholder="name@example.com">
+          <div class="field-label field-label-spaced">Subject (optional)</div>
+          <input type="text" id="input-email-subject" placeholder="Subject">
+          <div class="field-label field-label-spaced">Message (optional)</div>
+          <textarea id="input-email-body" placeholder="Message"></textarea>
+        </div>
+
+        <div class="content-form hidden" data-form="tel">
+          <div class="field-label">Phone number</div>
+          <input type="text" id="input-tel" placeholder="+1 555 123 4567">
+        </div>
+
+        <div class="content-form hidden" data-form="sms">
+          <div class="field-label">Phone number</div>
+          <input type="text" id="input-sms-number" placeholder="+1 555 123 4567">
+          <div class="field-label field-label-spaced">Message</div>
+          <textarea id="input-sms-body" placeholder="Your message"></textarea>
+        </div>
+
+        <div class="content-form hidden" data-form="wifi">
+          <div class="field-label">Network name (SSID)</div>
+          <input type="text" id="input-wifi-ssid" placeholder="MyNetwork">
+          <div class="field-label field-label-spaced">Password</div>
+          <input type="text" id="input-wifi-password" placeholder="Password">
+          <div class="field-label field-label-spaced">Encryption</div>
+          <select id="input-wifi-encryption">
+            <option value="WPA">WPA/WPA2</option>
+            <option value="WEP">WEP</option>
+            <option value="nopass">None</option>
+          </select>
+        </div>
+
+        <div class="char-count" id="char-count">0 characters</div>
+        <p class="hint">Hint: The shorter, the better. Some older scanner apps are having problems with texts longer than about 300 chars.</p>
+
+        <div class="notice">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+          <span>Your QR code is generated entirely in your browser — nothing is sent to a server or stored.</span>
+        </div>
+      </section>
+
+      <!-- Step 3: live canvas preview + Download / Embed actions -->
+      <section class="panel" aria-labelledby="preview-heading">
+        <h2 class="panel-heading" id="preview-heading">
+          <span class="panel-heading__step">Step 3</span>
+          <span class="panel-heading__title">Live preview</span>
+        </h2>
+        <!-- Placeholder shown until valid content exists; canvas hidden until then -->
+        <div class="preview-wrap" id="preview-wrap">
+          <div class="preview-placeholder" id="preview-placeholder">Enter a URL to generate a QR code</div>
+          <canvas id="preview-canvas" hidden aria-label="QR code preview"></canvas>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn btn-primary" id="btn-download" disabled>Download</button>
+          <button type="button" class="btn btn-secondary" id="btn-embed" disabled>Embed</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>QR codes are generated locally in your browser and are free to use for personal and commercial use.</p>
+  </footer>
+
+  <!-- Download modal: customise appearance then pick an export format -->
+  <div class="modal-overlay" id="download-modal" role="dialog" aria-labelledby="download-title" aria-modal="true">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="download-title">Download QR Code</h3>
+        <button type="button" class="modal-close" data-close="download-modal" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-preview">
+          <canvas id="modal-preview-canvas"></canvas>
+        </div>
+
+        <div class="option-group">
+          <label>Error correction</label>
+          <div class="option-row">
+            <select id="opt-ecc">
+              <option value="L">L (recommended)</option>
+              <option value="M">M</option>
+              <option value="Q">Q</option>
+              <option value="H">H</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="option-group">
+          <label>Colours</label>
+          <div class="option-row">
+            <span>Foreground</span>
+            <input type="color" id="opt-fg" value="#000000">
+            <span>Background</span>
+            <input type="color" id="opt-bg" value="#ffffff">
+          </div>
+        </div>
+
+        <div class="option-group">
+          <label>Border (quiet zone)</label>
+          <div class="option-row">
+            <select id="opt-margin">
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="option-group">
+          <label>Size (pixels)</label>
+          <div class="option-row">
+            <input type="number" id="opt-size" value="512" min="128" max="4096" step="64">
+          </div>
+        </div>
+
+        <!-- Vector exports (scalable, good for print) -->
+        <div class="option-group">
+          <label>Vector formats</label>
+          <div class="format-buttons">
+            <button type="button" class="format-btn" data-format="svg">SVG</button>
+            <button type="button" class="format-btn" data-format="eps">EPS</button>
+          </div>
+        </div>
+
+        <!-- Raster exports (fixed pixel dimensions) -->
+        <div class="option-group">
+          <label>Raster formats</label>
+          <div class="format-buttons">
+            <button type="button" class="format-btn" data-format="png">PNG</button>
+            <button type="button" class="format-btn" data-format="jpeg">JPEG</button>
+            <button type="button" class="format-btn" data-format="gif">GIF</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Embed modal: generates a data-URL and copy-paste HTML for a website -->
+  <div class="modal-overlay" id="embed-modal" role="dialog" aria-labelledby="embed-title" aria-modal="true">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="embed-title">Embed QR Code</h3>
+        <button type="button" class="modal-close" data-close="embed-modal" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-preview">
+          <canvas id="embed-preview-canvas"></canvas>
+        </div>
+
+        <div class="option-group">
+          <label>Error correction</label>
+          <select id="embed-ecc">
+            <option value="L">L (recommended)</option>
+            <option value="M">M</option>
+            <option value="Q">Q</option>
+            <option value="H">H</option>
+          </select>
+        </div>
+
+        <div class="option-group">
+          <label>Colours</label>
+          <div class="option-row">
+            <span>Foreground</span>
+            <input type="color" id="embed-fg" value="#000000">
+            <span>Background</span>
+            <input type="color" id="embed-bg" value="#ffffff">
+          </div>
+        </div>
+
+        <div class="option-group">
+          <label>Border</label>
+          <select id="embed-margin">
+            <option value="2" selected>2</option>
+            <option value="4">4</option>
+            <option value="6">6</option>
+            <option value="8">8</option>
+          </select>
+        </div>
+
+        <div class="option-group">
+          <label>Size (pixels)</label>
+          <input type="number" id="embed-size" value="256" min="64" max="1024" step="32">
+        </div>
+
+        <div class="embed-field">
+          <label>Link for text / email / messaging</label>
+          <textarea id="embed-link" readonly></textarea>
+        </div>
+
+        <div class="embed-field">
+          <label>HTML for embedding on a website</label>
+          <textarea id="embed-html" readonly></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- QRCode library: creates matrices, canvas previews, PNG/SVG data URLs -->
+  <script src="assets/js/qrcode.min.js"></script>
+  <script>
+    (function () {
+      /* ── Startup ─────────────────────────────────────────────────────── */
+
+      // Bail out early if the local QR library failed to load
+      if (typeof QRCode === 'undefined') {
+        document.getElementById('preview-placeholder').textContent =
+          'Could not load the QR code library. Please refresh the page.';
+        throw new Error('QRCode library failed to load');
+      }
+      // Human-readable labels shown beside "Type" in the step 1 heading
+      const TYPE_LABELS = {
+        url: 'url',
+        text: 'text',
+        email: 'email',
+        tel: 'tel',
+        sms: 'sms',
+        wifi: 'wifi'
+      };
+
+      // App state: which type is selected, the encoded string, and debounce timer
+      let currentType = 'url';
+      let currentPayload = '';
+      let debounceTimer = null;
+
+      // Cached DOM references used throughout the script
+      const typeLabel = document.getElementById('type-label');
+      const charCount = document.getElementById('char-count');
+      const previewCanvas = document.getElementById('preview-canvas');
+      const previewPlaceholder = document.getElementById('preview-placeholder');
+      const btnDownload = document.getElementById('btn-download');
+      const btnEmbed = document.getElementById('btn-embed');
+
+      /* ── QR rendering options ──────────────────────────────────────── */
+
+      // Reads download-modal controls; used for export and modal preview
+      const qrOptions = () => ({
+        errorCorrectionLevel: document.getElementById('opt-ecc')?.value || 'L',
+        margin: parseInt(document.getElementById('opt-margin')?.value || '2', 10),
+        color: {
+          dark: document.getElementById('opt-fg')?.value || '#000000',
+          light: document.getElementById('opt-bg')?.value || '#ffffff'
+        },
+        width: parseInt(document.getElementById('opt-size')?.value || '512', 10)
+      });
+
+      /* ── Build the string encoded into the QR code ─────────────────── */
+
+      // Read raw input from whichever form matches currentType
+      function getFormValues() {
+        switch (currentType) {
+          case 'url':
+            return document.getElementById('input-url').value.trim();
+          case 'text':
+            return document.getElementById('input-text').value;
+          case 'email': {
+            // Build a mailto: link with optional subject and body query params
+            const to = document.getElementById('input-email').value.trim();
+            const subject = document.getElementById('input-email-subject').value.trim();
+            const body = document.getElementById('input-email-body').value;
+            if (!to) return '';
+            let mailto = 'mailto:' + to;
+            const params = [];
+            if (subject) params.push('subject=' + encodeURIComponent(subject));
+            if (body) params.push('body=' + encodeURIComponent(body));
+            if (params.length) mailto += '?' + params.join('&');
+            return mailto;
+          }
+          case 'tel': {
+            const num = document.getElementById('input-tel').value.trim().replace(/\s+/g, '');
+            return num ? 'tel:' + num : '';
+          }
+          case 'sms': {
+            const num = document.getElementById('input-sms-number').value.trim().replace(/\s+/g, '');
+            const body = document.getElementById('input-sms-body').value;
+            if (!num) return '';
+            return 'sms:' + num + (body ? '?body=' + encodeURIComponent(body) : '');
+          }
+          case 'wifi': {
+            // Standard WIFI: QR format — scanners use this to join a network
+            const ssid = document.getElementById('input-wifi-ssid').value.trim();
+            const password = document.getElementById('input-wifi-password').value;
+            const encryption = document.getElementById('input-wifi-encryption').value;
+            if (!ssid) return '';
+            const escapeWifi = (s) => s.replace(/([\\;,:"])/g, '\\$1');
+            return 'WIFI:T:' + encryption + ';S:' + escapeWifi(ssid) + ';P:' + escapeWifi(password) + ';;';
+          }
+          default:
+            return '';
+        }
+      }
+
+      // Prepend https:// when the user omits a scheme on URL type
+      function normalizeUrl(value) {
+        if (!value) return '';
+        if (/^https?:\/\//i.test(value)) return value;
+        return 'https://' + value;
+      }
+
+      // Final string passed to the QR library (empty = no preview)
+      function buildPayload() {
+        const raw = getFormValues();
+        if (!raw) return '';
+        if (currentType === 'url') return normalizeUrl(raw);
+        return raw;
+      }
+
+      function updateCharCount(text) {
+        charCount.textContent = text.length + ' character' + (text.length === 1 ? '' : 's');
+      }
+
+      /* ── Type switching & live preview ─────────────────────────────── */
+
+      // Switch QR type: update buttons, show the right form, regenerate preview
+      function setType(type) {
+        currentType = type;
+        typeLabel.textContent = TYPE_LABELS[type] || type;
+
+        document.querySelectorAll('.type-btn').forEach((btn) => {
+          const active = btn.dataset.type === type;
+          btn.classList.toggle('active', active);
+          btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+
+        document.querySelectorAll('.content-form').forEach((form) => {
+          form.classList.toggle('hidden', form.dataset.form !== type);
+        });
+
+        scheduleGenerate();
+      }
+
+      // Draw the QR onto a <canvas> using the qrcode library
+      async function renderToCanvas(canvas, text, options) {
+        const opts = {
+          errorCorrectionLevel: options.errorCorrectionLevel || 'L',
+          margin: options.margin ?? 2,
+          color: options.color || { dark: '#000000', light: '#ffffff' },
+          width: options.width || 256
+        };
+
+        await QRCode.toCanvas(canvas, text, opts);
+      }
+
+      function clearPreviewCanvas(canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        canvas.width = 0;
+        canvas.height = 0;
+        canvas.hidden = true;
+      }
+
+      // Show placeholder text and disable Download/Embed when there is no content
+      function resetPreview(message) {
+        currentPayload = '';
+        clearPreviewCanvas(previewCanvas);
+        previewPlaceholder.hidden = false;
+        previewPlaceholder.textContent = message;
+        btnDownload.disabled = true;
+        btnEmbed.disabled = true;
+      }
+
+      // Main preview update: build payload, render at 220px, enable action buttons
+      async function generatePreview() {
+        const rawValue = getFormValues();
+        const payload = buildPayload();
+        updateCharCount(currentType === 'url' ? rawValue : payload);
+
+        if (!payload) {
+          resetPreview(
+            currentType === 'url'
+              ? 'Enter a URL to generate a QR code'
+              : 'Enter content to generate a QR code'
+          );
+          return;
+        }
+
+        currentPayload = payload;
+
+        try {
+          await renderToCanvas(previewCanvas, payload, {
+            errorCorrectionLevel: 'L',
+            margin: 2,
+            color: { dark: '#000000', light: '#ffffff' },
+            width: 220
+          });
+          previewCanvas.hidden = false;
+          previewPlaceholder.hidden = true;
+          btnDownload.disabled = false;
+          btnEmbed.disabled = false;
+        } catch (err) {
+          resetPreview('Could not generate QR code — check your input.');
+        }
+      }
+
+      // Debounce rapid typing so we don't regenerate on every keystroke
+      function scheduleGenerate() {
+        clearTimeout(debounceTimer);
+        if (!getFormValues().trim()) {
+          generatePreview();
+          return;
+        }
+        debounceTimer = setTimeout(generatePreview, 150);
+      }
+
+      /* ── Download & export ─────────────────────────────────────────── */
+
+      // Trigger a file download from an in-memory Blob
+      function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      // Get the raw module matrix (used for custom EPS export)
+      function matrixFromPayload(text, ecc) {
+        return QRCode.create(text, { errorCorrectionLevel: ecc });
+      }
+
+      // Convert QR module matrix to PostScript — qrcode.js has no native EPS support
+      function matrixToEps(qr, dark, light, marginModules, targetWidth) {
+        const modules = qr.modules;
+        const moduleCount = modules.size;
+        const totalModules = moduleCount + marginModules * 2;
+        const dim = Math.round(targetWidth);
+        const cell = dim / totalModules;
+        const quiet = marginModules * cell;
+
+        const parseHex = (hex) => {
+          const h = hex.replace('#', '');
+          return [
+            parseInt(h.slice(0, 2), 16) / 255,
+            parseInt(h.slice(2, 4), 16) / 255,
+            parseInt(h.slice(4, 6), 16) / 255
+          ];
+        };
+
+        const [dr, dg, db] = parseHex(dark);
+        const [lr, lg, lb] = parseHex(light);
+
+        let eps = '%!PS-Adobe-3.0 EPSF-3.0\n';
+        eps += '%%Creator: QR Code Generator\n';
+        eps += '%%Title: QR Code\n';
+        eps += '%%BoundingBox: 0 0 ' + dim + ' ' + dim + '\n';
+        eps += '%%HiResBoundingBox: 0 0 ' + dim + ' ' + dim + '\n';
+        eps += '%%EndComments\n\n';
+        eps += '%%Page: 1 1\n';
+        eps += 'gsave\n';
+        eps += lr + ' ' + lg + ' ' + lb + ' setrgbcolor\n';
+        eps += '0 0 ' + dim + ' ' + dim + ' rectfill\n';
+        eps += dr + ' ' + dg + ' ' + db + ' setrgbcolor\n';
+
+        for (let row = 0; row < moduleCount; row++) {
+          for (let col = 0; col < moduleCount; col++) {
+            if (modules.get(row, col)) {
+              const x = quiet + col * cell;
+              const y = dim - quiet - (row + 1) * cell;
+              eps += x.toFixed(3) + ' ' + y.toFixed(3) + ' ' + cell.toFixed(3) + ' ' + cell.toFixed(3) + ' rectfill\n';
+            }
+          }
+        }
+
+        eps += 'grestore\n';
+        eps += 'showpage\n';
+        eps += '%%Trailer\n';
+        eps += '%%EOF\n';
+        return eps;
+      }
+
+      // Export in the chosen format using download-modal settings
+      async function downloadFormat(format) {
+        if (!currentPayload) return;
+
+        const opts = qrOptions();
+        const baseName = 'qrcode';
+
+        try {
+          if (format === 'png') {
+            const url = await QRCode.toDataURL(currentPayload, { ...opts, type: 'image/png' });
+            const res = await fetch(url);
+            downloadBlob(await res.blob(), baseName + '.png');
+          } else if (format === 'jpeg') {
+            const url = await QRCode.toDataURL(currentPayload, { ...opts, type: 'image/jpeg' });
+            const res = await fetch(url);
+            downloadBlob(await res.blob(), baseName + '.jpg');
+          } else if (format === 'gif') {
+            // GIF is built manually: render to canvas, then encode with gifenc
+            const canvas = document.createElement('canvas');
+            await renderToCanvas(canvas, currentPayload, opts);
+            const ctx = canvas.getContext('2d');
+            const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const { GIFEncoder, quantize, applyPalette } = await import('./assets/js/gifenc.mjs');
+            const palette = quantize(data, 256);
+            const index = applyPalette(data, palette);
+            const gif = GIFEncoder();
+            gif.writeFrame(index, width, height, { palette, delay: 0 });
+            gif.finish();
+            downloadBlob(new Blob([gif.bytes()], { type: 'image/gif' }), baseName + '.gif');
+          } else if (format === 'svg') {
+            const svg = await QRCode.toString(currentPayload, { ...opts, type: 'svg' });
+            downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), baseName + '.svg');
+          } else if (format === 'eps') {
+            const qr = matrixFromPayload(currentPayload, opts.errorCorrectionLevel);
+            const eps = matrixToEps(
+              qr,
+              opts.color.dark,
+              opts.color.light,
+              opts.margin,
+              opts.width
+            );
+            downloadBlob(new Blob([eps], { type: 'application/postscript' }), baseName + '.eps');
+          }
+        } catch (err) {
+          alert('Download failed: ' + err.message);
+        }
+      }
+
+      /* ── Modals (Download & Embed) ─────────────────────────────────── */
+
+      async function refreshModalPreview(canvas, options) {
+        if (!currentPayload) return;
+        await renderToCanvas(canvas, currentPayload, options);
+      }
+
+      async function openDownloadModal() {
+        if (!currentPayload) return;
+        document.getElementById('download-modal').classList.add('open');
+        await refreshModalPreview(
+          document.getElementById('modal-preview-canvas'),
+          { ...qrOptions(), width: 180 }
+        );
+      }
+
+      // Regenerate embed textareas: PNG data-URL and an <img> snippet
+      async function updateEmbedFields() {
+        if (!currentPayload) return;
+
+        const opts = {
+          errorCorrectionLevel: document.getElementById('embed-ecc').value,
+          margin: parseInt(document.getElementById('embed-margin').value, 10),
+          color: {
+            dark: document.getElementById('embed-fg').value,
+            light: document.getElementById('embed-bg').value
+          },
+          width: parseInt(document.getElementById('embed-size').value, 10)
+        };
+
+        await refreshModalPreview(document.getElementById('embed-preview-canvas'), { ...opts, width: 180 });
+
+        const dataUrl = await QRCode.toDataURL(currentPayload, { ...opts, type: 'image/png' });
+        document.getElementById('embed-link').value = dataUrl;
+        document.getElementById('embed-html').value =
+          '<img src="' + dataUrl + '" alt="QR Code" width="' + opts.width + '" height="' + opts.width + '">';
+      }
+
+      async function openEmbedModal() {
+        if (!currentPayload) return;
+        document.getElementById('embed-modal').classList.add('open');
+        await updateEmbedFields();
+      }
+
+      function closeModal(id) {
+        document.getElementById(id).classList.remove('open');
+      }
+
+      /* ── Event wiring ──────────────────────────────────────────────── */
+
+      // Step 1: type picker buttons
+      document.querySelectorAll('.type-btn').forEach((btn) => {
+        btn.addEventListener('click', () => setType(btn.dataset.type));
+      });
+
+      // Step 2: any main-form input change triggers a debounced preview refresh
+      document.querySelectorAll('input, textarea, select').forEach((el) => {
+        if (el.closest('.modal-overlay')) return;
+        el.addEventListener('input', scheduleGenerate);
+        el.addEventListener('change', scheduleGenerate);
+      });
+
+      btnDownload.addEventListener('click', openDownloadModal);
+      btnEmbed.addEventListener('click', openEmbedModal);
+
+      // Close buttons and clicking the backdrop dismiss a modal
+      document.querySelectorAll('.modal-close').forEach((btn) => {
+        btn.addEventListener('click', () => closeModal(btn.dataset.close));
+      });
+
+      document.querySelectorAll('.modal-overlay').forEach((overlay) => {
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) overlay.classList.remove('open');
+        });
+      });
+
+      // Each format button in the download modal triggers a file save
+      document.querySelectorAll('.format-btn').forEach((btn) => {
+        btn.addEventListener('click', () => downloadFormat(btn.dataset.format));
+      });
+
+      // Download-modal option changes update the modal preview live
+      ['opt-ecc', 'opt-margin', 'opt-fg', 'opt-bg', 'opt-size'].forEach((id) => {
+        const el = document.getElementById(id);
+        el.addEventListener('change', async () => {
+          await refreshModalPreview(
+            document.getElementById('modal-preview-canvas'),
+            { ...qrOptions(), width: 180 }
+          );
+        });
+      });
+
+      // Embed-modal option changes regenerate the data-URL and HTML snippet
+      ['embed-ecc', 'embed-margin', 'embed-fg', 'embed-bg', 'embed-size'].forEach((id) => {
+        document.getElementById(id).addEventListener('change', updateEmbedFields);
+        document.getElementById(id).addEventListener('input', updateEmbedFields);
+      });
+
+      // Close any open modal with Escape
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          document.querySelectorAll('.modal-overlay.open').forEach((m) => m.classList.remove('open'));
+        }
+      });
+
+      /* ── Initialise with a demo URL so the preview is populated on load ── */
+      document.getElementById('input-url').value = 'https://www.vam.ac.uk/exhibitions/david-bowie-centre';
+      generatePreview();
+    })();
+  </script>
+</body>
+</html>
